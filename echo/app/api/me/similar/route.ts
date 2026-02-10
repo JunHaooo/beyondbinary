@@ -27,8 +27,8 @@ export async function GET(req: NextRequest) {
 
   try {
     // CTE fetches the target embedding once; we filter to the same user only,
-    // excluding the entry itself. No cosine-distance threshold so we always
-    // return up to 5 results even if similarity is modest.
+    // excluding the entry itself. Only returns entries with cosine distance < 0.5
+    // to ensure genuine semantic similarity.
     const similar = (await sql`
       WITH target AS (
         SELECT embedding
@@ -46,6 +46,7 @@ export async function GET(req: NextRequest) {
       WHERE e.user_id = ${userId}
         AND e.id        != ${entryId}
         AND e.embedding IS NOT NULL
+        AND (e.embedding <=> t.embedding) < 0.5
       ORDER BY e.embedding <=> t.embedding
       LIMIT 5
     `) as SimilarEntry[];
