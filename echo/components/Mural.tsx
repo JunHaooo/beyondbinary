@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import type { Entry } from '@/lib/types';
 import { drawSmooth, drawSpiky, drawJagged, seedFromId } from '@/lib/shapes';
 import { getUserId } from '@/lib/user';
@@ -39,8 +39,8 @@ const REF_H = 600;
 const HIT_RADIUS = 26;
 // Visual blob radius in reference coords
 const BLOB_RADIUS = 18;
-// How long the similarity glow lasts (ms)
-const GLOW_DURATION = 3200;
+// How long the resonance pulse lasts (ms)
+const GLOW_DURATION = 4500;
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -51,14 +51,96 @@ export default function Mural() {
   const entriesRef = useRef<Entry[]>([]);
   const userIdRef = useRef<string | null>(null);
   const highlightedRef = useRef<string | null>(null);
-  /** id → timestamp when glow started */
+  /** id → timestamp when resonance glow started (scales + pulses) */
   const glowMapRef = useRef<Map<string, number>>(new Map());
+  /** id → timestamp when similarity glow started (just glow, no scaling) */
+  const similarityGlowMapRef = useRef<Map<string, number>>(new Map());
   const lastTapRef = useRef<{ id: string; time: number } | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [similarPanel, setSimilarPanel] = useState<SimilarPanel | null>(null);
   const [panelVisible, setPanelVisible] = useState(false);
+
+  // Record a resonance and trigger a glow burst
+  const handleResonate = useCallback(async (targetId: string) => {
+    const actorId = getUserId();
+    const now = Date.now();
+    
+    // Glow the target blob on the other user's screen
+    glowMapRef.current.set(targetId, now);
+    
+    try {
+      await fetch('/api/resonate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_id: targetId, actor_id: actorId }),
+      });
+    } catch {
+      // Fail silently
+    }
+  }, []);
+
+  // Highlight a blob and either show similar moments (own) or open resonate panel (others)
+  const handleSelect = useCallback(async (blob: Entry) => {
+    const isOwnBlob = !!blob.user_id && blob.user_id === userIdRef.current;
+
+    // Toggle off if already selected
+    if (highlightedRef.current === blob.id) {
+      highlightedRef.current = null;
+      glowMapRef.current.clear();
+      similarityGlowMapRef.current.clear();
+      setSimilarPanel(null);
+      return;
+    }
+    highlightedRef.current = blob.id;
+    glowMapRef.current.clear();
+    similarityGlowMapRef.current.clear();
+
+    if (isOwnBlob) {
+      // Show "Similar Moments" panel from the user's own history
+      setSimilarPanel({ blob, moments: [], loading: true });
+      try {
+        const res = await fetch(
+          `/api/me/similar?entryId=${blob.id}&userId=${blob.user_id}`,
+        );
+        if (!res.ok) {
+          setSimilarPanel((prev) => (prev ? { ...prev, loading: false } : null));
+          return;
+        }
+        const moments: SimilarMoment[] = await res.json();
+        setSimilarPanel((prev) =>
+          prev ? { ...prev, moments, loading: false } : null,
+        );
+      } catch {
+        setSimilarPanel((prev) => (prev ? { ...prev, loading: false } : null));
+      }
+    } else {
+      // Show resonate option for other people's blobs
+      setSimilarPanel({ blob, moments: [], loading: false });
+      
+      // Fetch and glow semantically similar blobs
+      try {
+        console.log('[handleSelect] Fetching similar blobs for:', blob.id);
+        const res = await fetch(`/api/stream?entry_id=${blob.id}`);
+        if (!res.ok) {
+          console.log('[handleSelect] Fetch failed with status:', res.status);
+          return;
+        }
+        const similar: Entry[] = await res.json();
+        console.log('[handleSelect] Got similar blobs:', similar.length, similar);
+        const ts = Date.now();
+        for (const s of similar) {
+          if (s.id !== blob.id) {
+            console.log('[handleSelect] Setting similarity glow for:', s.id);
+            similarityGlowMapRef.current.set(s.id, ts);
+          }
+        }
+      } catch (err) {
+        console.error('[handleSelect] Fetch error:', err);
+      }
+    }
+  }, []);
 
   // Animate panel in/out
   useEffect(() => {
@@ -83,7 +165,33 @@ export default function Mural() {
       });
   }, []);
 
-  // Canvas setup, RAF loop, event listeners — initialised once on mount
+  // Poll for recent resonances to show incoming pulses
+  useEffect(() => {
+    const pollResonate = async () => {
+      const userId = userIdRef.current;
+      if (!userId) return;
+      
+      try {
+        const res = await fetch(`/api/me/resonances?userId=${userId}`);
+        if (!res.ok) return;
+        const resonances: Array<{ target_entry_id: string }> = await res.json();
+        const now = Date.now();
+        for (const r of resonances) {
+          // Only glow if not already glowing or recently glowed
+          if (!glowMapRef.current.has(r.target_entry_id)) {
+            glowMapRef.current.set(r.target_entry_id, now);
+          }
+        }
+      } catch {
+        // Fail silently
+      }
+    };
+
+    const interval = setInterval(pollResonate, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+    // Canvas setup, RAF loop, event listeners — initialised once on mount
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -137,10 +245,24 @@ export default function Mural() {
         const glowAge = glowStart !== undefined ? now - glowStart : -1;
         const isGlowing = glowAge >= 0 && glowAge < GLOW_DURATION;
 
+        const similarityGlowStart = similarityGlowMapRef.current.get(entry.id);
+        const similarityGlowAge = similarityGlowStart !== undefined ? now - similarityGlowStart : -1;
+        const isSimilarityGlowing = similarityGlowAge >= 0 && similarityGlowAge < GLOW_DURATION;
+
         // Expire finished glows
         if (glowAge >= GLOW_DURATION) glowMapRef.current.delete(entry.id);
+        if (similarityGlowAge >= GLOW_DURATION) similarityGlowMapRef.current.delete(entry.id);
 
         ctx.save();
+
+        // Calculate radius with pulse effect only for resonance glows (not similarity)
+        let drawRadius = blobR;
+        if (isGlowing) {
+          const t = glowAge / GLOW_DURATION;
+          // Size pulse: continuous oscillation that fades out (no pause)
+          const sizePulse = Math.abs(Math.sin(t * Math.PI * 5)) * (1 - t);
+          drawRadius = blobR * (1 + 0.35 * sizePulse); // scale from 1x to 1.35x size
+        }
 
         if (isHighlighted) {
           ctx.shadowColor = '#ffffff';
@@ -148,11 +270,17 @@ export default function Mural() {
           ctx.fillStyle = entry.color;
         } else if (isGlowing) {
           const t = glowAge / GLOW_DURATION;
-          // 3 quick pulses that fade out
-          const pulse = Math.max(0, Math.sin(t * Math.PI * 3) * (1 - t));
+          // Resonance pulse: continuous oscillation that fades out (no pause)
+          const pulse = Math.abs(Math.sin(t * Math.PI * 5)) * (1 - t);
           ctx.shadowColor = entry.color;
           ctx.shadowBlur = 22 * pulse;
           ctx.fillStyle = entry.color + 'bb';
+        } else if (isSimilarityGlowing) {
+          const t = similarityGlowAge / GLOW_DURATION;
+          // Similarity glow: soft glow that fades out, no pulsing
+          ctx.shadowColor = entry.color;
+          ctx.shadowBlur = 18 * (1 - t); // fade out over time
+          ctx.fillStyle = entry.color + 'aa'; // slightly transparent
         } else if (isOwnBlob) {
           ctx.shadowBlur = 0;
           ctx.fillStyle = entry.color; // full opacity for own blobs
@@ -164,16 +292,16 @@ export default function Mural() {
         const seed = seedFromId(entry.id);
         switch (entry.shape) {
           case 'smooth':
-            drawSmooth(ctx, x, y, blobR);
+            drawSmooth(ctx, x, y, drawRadius);
             break;
           case 'spiky':
-            drawSpiky(ctx, x, y, blobR);
+            drawSpiky(ctx, x, y, drawRadius);
             break;
           case 'jagged':
-            drawJagged(ctx, x, y, blobR, seed);
+            drawJagged(ctx, x, y, drawRadius, seed);
             break;
           default:
-            drawSmooth(ctx, x, y, blobR);
+            drawSmooth(ctx, x, y, drawRadius);
         }
 
         // White ring around the current user's blob
@@ -212,84 +340,18 @@ export default function Mural() {
       return null;
     };
 
-    /** Highlight a blob and either show similar moments (own) or glow neighbours (others) */
-    const handleSelect = async (blob: Entry) => {
-      const isOwnBlob = !!blob.user_id && blob.user_id === userIdRef.current;
-
-      // Toggle off if already selected
-      if (highlightedRef.current === blob.id) {
-        highlightedRef.current = null;
-        glowMapRef.current.clear();
-        setSimilarPanel(null);
-        return;
-      }
-      highlightedRef.current = blob.id;
-      glowMapRef.current.clear();
-
-      if (isOwnBlob) {
-        // Show "Similar Moments" panel from the user's own history
-        setSimilarPanel({ blob, moments: [], loading: true });
-        try {
-          const res = await fetch(
-            `/api/me/similar?entryId=${blob.id}&userId=${blob.user_id}`,
-          );
-          if (!res.ok) {
-            setSimilarPanel((prev) => (prev ? { ...prev, loading: false } : null));
-            return;
-          }
-          const moments: SimilarMoment[] = await res.json();
-          setSimilarPanel((prev) =>
-            prev ? { ...prev, moments, loading: false } : null,
-          );
-        } catch {
-          setSimilarPanel((prev) => (prev ? { ...prev, loading: false } : null));
-        }
-      } else {
-        // Existing behaviour: glow semantically similar blobs from all users
-        setSimilarPanel(null);
-        try {
-          const res = await fetch(`/api/stream?entry_id=${blob.id}`);
-          if (!res.ok) return;
-          const similar: Entry[] = await res.json();
-          const ts = Date.now();
-          for (const s of similar) {
-            if (s.id !== blob.id) glowMapRef.current.set(s.id, ts);
-          }
-        } catch {
-          // Fail silently — highlight still works, glow just won't appear
-        }
-      }
+    const handleDblClick = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const { rx, ry } = toRef(e.clientX - rect.left, e.clientY - rect.top);
+      const blob = findBlob(rx, ry);
+      if (blob) handleResonate(blob.id);
     };
-
-    /** Record a resonance and trigger a glow burst */
-    const handleResonate = async (targetId: string) => {
-      const actorId = getUserId();
-      glowMapRef.current.set(targetId, Date.now()); // optimistic glow
-      try {
-        await fetch('/api/resonate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ target_id: targetId, actor_id: actorId }),
-        });
-      } catch {
-        // Fail silently
-      }
-    };
-
-    // ── Event listeners ─────────────────────────────────────────────────────
 
     const handleClick = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       const { rx, ry } = toRef(e.clientX - rect.left, e.clientY - rect.top);
       const blob = findBlob(rx, ry);
       if (blob) handleSelect(blob);
-    };
-
-    const handleDblClick = (e: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const { rx, ry } = toRef(e.clientX - rect.left, e.clientY - rect.top);
-      const blob = findBlob(rx, ry);
-      if (blob) handleResonate(blob.id);
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
@@ -349,7 +411,7 @@ export default function Mural() {
         </div>
       )}
 
-      {/* ── Similar Moments bottom sheet ───────────────────────────────────── */}
+      {/* ── Similar Moments / Resonate Panel ────────────────────────────────────── */}
       {similarPanel && (
         <div
           className="absolute inset-0 z-20"
@@ -374,7 +436,9 @@ export default function Mural() {
               <div className="flex items-start justify-between mb-5">
                 <div className="flex-1 pr-4">
                   <p className="text-white/30 text-xs tracking-widest uppercase mb-2">
-                    You&apos;ve felt this before
+                    {similarPanel.moments.length > 0
+                      ? "You've felt this before"
+                      : 'Someone echoed'}
                   </p>
                   <p className="text-white/65 text-sm italic leading-snug line-clamp-3">
                     &ldquo;{similarPanel.blob.message}&rdquo;
@@ -396,8 +460,8 @@ export default function Mural() {
                 </p>
               )}
 
-              {/* No similar results */}
-              {!similarPanel.loading && similarPanel.moments.length === 0 && (
+              {/* No similar results - only show for own blobs */}
+              {!similarPanel.loading && similarPanel.moments.length === 0 && similarPanel.blob.user_id === userIdRef.current && (
                 <p className="text-white/30 text-sm leading-relaxed py-2">
                   No similar moments found yet. Keep echoing.
                 </p>
@@ -426,6 +490,22 @@ export default function Mural() {
                     This feeling comes and goes. You&apos;ve moved through it before.
                   </p>
                 </>
+              )}
+
+              {/* Resonate button for other people's blobs */}
+              {!similarPanel.loading && similarPanel.moments.length === 0 && similarPanel.blob.user_id && similarPanel.blob.user_id !== userIdRef.current && (
+                <button
+                  onClick={() => handleResonate(similarPanel.blob.id)}
+                  className="w-full mt-6 px-4 py-2.5 
+                           bg-white/10 hover:bg-white/20 
+                           text-white/70 hover:text-white
+                           border border-white/[0.15] hover:border-white/30
+                           rounded-lg transition-all duration-200
+                           text-sm font-medium tracking-wide
+                           active:scale-95"
+                >
+                  Resonate
+                </button>
               )}
             </div>
           </div>
