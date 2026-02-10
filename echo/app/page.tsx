@@ -33,6 +33,13 @@ export default function Home() {
         >
           view the mural
         </Link>
+        <Link
+          href="/me"
+          className="w-full py-3 text-white/20 text-xs tracking-widest uppercase
+                     text-center hover:text-white/40 transition-colors duration-200"
+        >
+          your echoes →
+        </Link>
       </div>
     </main>
   );

@@ -32,17 +32,19 @@ export async function POST(req: NextRequest) {
     const embeddingLiteral = `[${analysis.embedding.join(',')}]`;
 
     const rows = (await sql`
-      INSERT INTO entries (user_id, message, embedding, color, shape, x, y)
+      INSERT INTO entries (user_id, message, embedding, color, shape, intensity, category, x, y)
       VALUES (
         ${user_id},
         ${text.trim()},
         ${embeddingLiteral}::vector,
         ${analysis.color},
         ${analysis.shape},
+        ${analysis.intensity},
+        ${analysis.category},
         ${x},
         ${y}
       )
-      RETURNING id, color, shape, x, y
+      RETURNING id, color, shape, intensity, category, x, y
     `) as Entry[];
 
     return Response.json({
@@ -51,8 +53,8 @@ export async function POST(req: NextRequest) {
       shape: rows[0].shape,
       x: rows[0].x,
       y: rows[0].y,
-      intensity: analysis.intensity,
-      category: analysis.category
+      intensity: rows[0].intensity,
+      category: rows[0].category,
     });
   } catch (err) {
     console.error('[POST /api/entry]', err);

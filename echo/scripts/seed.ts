@@ -97,19 +97,21 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function seedEntry(message: string, index: number): Promise<boolean> {
   try {
     const userId = crypto.randomUUID();
-    const { color, shape, embedding } = await analyseEntry(message);
+    const { color, shape, intensity, category, embedding } = await analyseEntry(message);
     const x = Math.floor(50 + Math.random() * 700); // 50–750
     const y = Math.floor(50 + Math.random() * 500); // 50–550
     const embeddingLiteral = `[${embedding.join(',')}]`;
 
     await sql`
-      INSERT INTO entries (user_id, message, embedding, color, shape, x, y)
+      INSERT INTO entries (user_id, message, embedding, color, shape, intensity, category, x, y)
       VALUES (
         ${userId},
         ${message},
         ${embeddingLiteral}::vector,
         ${color},
         ${shape},
+        ${intensity},
+        ${category},
         ${x},
         ${y}
       )

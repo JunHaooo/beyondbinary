@@ -23,6 +23,17 @@ export default function MuralPage() {
         </span>
       </div>
 
+      {/* Me link — top-right */}
+      <Link
+        href="/me"
+        className="fixed top-6 right-6 z-10
+                   text-white/30 text-xs tracking-widest uppercase
+                   hover:text-white/55 transition-colors"
+        aria-label="Your echoes"
+      >
+        me
+      </Link>
+
       {/* FAB — bottom-right */}
       <Link
         href="/submit"

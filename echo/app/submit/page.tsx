@@ -116,6 +116,12 @@ export default function SubmitPage() {
         <span className="text-white/40 text-xs tracking-[0.4em] uppercase">
           echo
         </span>
+        <Link
+          href="/me"
+          className="text-white/25 text-xs tracking-widest uppercase hover:text-white/45 transition-colors"
+        >
+          me
+        </Link>
       </div>
 
       {/* Form */}

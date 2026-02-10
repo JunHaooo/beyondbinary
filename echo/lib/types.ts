@@ -4,6 +4,8 @@ export interface Entry {
   message: string;
   color: string;
   shape: 'spiky' | 'smooth' | 'jagged';
+  intensity: number | null;
+  category: string | null;
   x: number;
   y: number;
   created_at: string;

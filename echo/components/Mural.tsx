@@ -5,6 +5,33 @@ import type { Entry } from '@/lib/types';
 import { drawSmooth, drawSpiky, drawJagged, seedFromId } from '@/lib/shapes';
 import { getUserId } from '@/lib/user';
 
+// ── Similar Moments types ─────────────────────────────────────────────────────
+
+interface SimilarMoment {
+  id: string;
+  message: string;
+  created_at: string;
+  distance: number;
+}
+
+interface SimilarPanel {
+  blob: Entry;
+  moments: SimilarMoment[];
+  loading: boolean;
+}
+
+function timeAgo(dateStr: string): string {
+  const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86_400_000);
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 7)  return `${days} days ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks === 1) return '1 week ago';
+  if (weeks < 5)  return `${weeks} weeks ago`;
+  const months = Math.floor(days / 30);
+  return months === 1 ? '1 month ago' : `${months} months ago`;
+}
+
 // Coordinate reference space — blobs are stored in this space
 const REF_W = 800;
 const REF_H = 600;
@@ -30,6 +57,14 @@ export default function Mural() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [similarPanel, setSimilarPanel] = useState<SimilarPanel | null>(null);
+  const [panelVisible, setPanelVisible] = useState(false);
+
+  // Animate panel in/out
+  useEffect(() => {
+    if (similarPanel) requestAnimationFrame(() => setPanelVisible(true));
+    else setPanelVisible(false);
+  }, [similarPanel]);
 
   // Fetch initial entries
   useEffect(() => {
@@ -177,27 +212,52 @@ export default function Mural() {
       return null;
     };
 
-    /** Highlight a blob and fetch its semantic neighbours */
+    /** Highlight a blob and either show similar moments (own) or glow neighbours (others) */
     const handleSelect = async (blob: Entry) => {
+      const isOwnBlob = !!blob.user_id && blob.user_id === userIdRef.current;
+
       // Toggle off if already selected
       if (highlightedRef.current === blob.id) {
         highlightedRef.current = null;
         glowMapRef.current.clear();
+        setSimilarPanel(null);
         return;
       }
       highlightedRef.current = blob.id;
       glowMapRef.current.clear();
 
-      try {
-        const res = await fetch(`/api/stream?entry_id=${blob.id}`);
-        if (!res.ok) return;
-        const similar: Entry[] = await res.json();
-        const ts = Date.now();
-        for (const s of similar) {
-          if (s.id !== blob.id) glowMapRef.current.set(s.id, ts);
+      if (isOwnBlob) {
+        // Show "Similar Moments" panel from the user's own history
+        setSimilarPanel({ blob, moments: [], loading: true });
+        try {
+          const res = await fetch(
+            `/api/me/similar?entryId=${blob.id}&userId=${blob.user_id}`,
+          );
+          if (!res.ok) {
+            setSimilarPanel((prev) => (prev ? { ...prev, loading: false } : null));
+            return;
+          }
+          const moments: SimilarMoment[] = await res.json();
+          setSimilarPanel((prev) =>
+            prev ? { ...prev, moments, loading: false } : null,
+          );
+        } catch {
+          setSimilarPanel((prev) => (prev ? { ...prev, loading: false } : null));
         }
-      } catch {
-        // Fail silently — highlight still works, glow just won't appear
+      } else {
+        // Existing behaviour: glow semantically similar blobs from all users
+        setSimilarPanel(null);
+        try {
+          const res = await fetch(`/api/stream?entry_id=${blob.id}`);
+          if (!res.ok) return;
+          const similar: Entry[] = await res.json();
+          const ts = Date.now();
+          for (const s of similar) {
+            if (s.id !== blob.id) glowMapRef.current.set(s.id, ts);
+          }
+        } catch {
+          // Fail silently — highlight still works, glow just won't appear
+        }
       }
     };
 
@@ -286,6 +346,89 @@ export default function Mural() {
       {error && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <p className="text-red-400/50 text-sm">{error}</p>
+        </div>
+      )}
+
+      {/* ── Similar Moments bottom sheet ───────────────────────────────────── */}
+      {similarPanel && (
+        <div
+          className="absolute inset-0 z-20"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSimilarPanel(null);
+          }}
+        >
+          <div
+            className={`absolute bottom-0 left-0 right-0
+                        bg-[#0d0d18]/96 backdrop-blur-md
+                        border-t border-white/[0.07] rounded-t-2xl
+                        transition-transform duration-300 ease-out
+                        ${panelVisible ? 'translate-y-0' : 'translate-y-full'}`}
+          >
+            {/* Drag handle */}
+            <div className="flex justify-center pt-3 pb-1">
+              <div className="w-8 h-0.5 bg-white/15 rounded-full" />
+            </div>
+
+            <div className="px-6 pt-3 pb-10 max-h-[58vh] overflow-y-auto">
+              {/* Header */}
+              <div className="flex items-start justify-between mb-5">
+                <div className="flex-1 pr-4">
+                  <p className="text-white/30 text-xs tracking-widest uppercase mb-2">
+                    You&apos;ve felt this before
+                  </p>
+                  <p className="text-white/65 text-sm italic leading-snug line-clamp-3">
+                    &ldquo;{similarPanel.blob.message}&rdquo;
+                  </p>
+                </div>
+                <button
+                  onClick={() => setSimilarPanel(null)}
+                  className="text-white/30 text-2xl leading-none hover:text-white/60 transition-colors mt-0.5 shrink-0"
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Loading */}
+              {similarPanel.loading && (
+                <p className="text-white/20 text-xs tracking-widest animate-pulse py-2">
+                  searching your echoes...
+                </p>
+              )}
+
+              {/* No similar results */}
+              {!similarPanel.loading && similarPanel.moments.length === 0 && (
+                <p className="text-white/30 text-sm leading-relaxed py-2">
+                  No similar moments found yet. Keep echoing.
+                </p>
+              )}
+
+              {/* Moments list */}
+              {!similarPanel.loading && similarPanel.moments.length > 0 && (
+                <>
+                  <div className="flex flex-col gap-3 mb-5">
+                    {similarPanel.moments.map((m) => (
+                      <div
+                        key={m.id}
+                        className="border-l-2 border-white/[0.12] pl-3"
+                      >
+                        <p className="text-white/55 text-sm leading-snug line-clamp-2">
+                          {m.message}
+                        </p>
+                        <p className="text-white/20 text-xs mt-1">
+                          {timeAgo(m.created_at)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <p className="text-white/25 text-xs italic leading-relaxed pt-4 border-t border-white/[0.06]">
+                    This feeling comes and goes. You&apos;ve moved through it before.
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
