@@ -115,6 +115,27 @@ export default function Mural() {
       } catch {
         setSimilarPanel((prev) => (prev ? { ...prev, loading: false } : null));
       }
+      
+      // Also fetch and glow semantically similar blobs (from any user)
+      try {
+        console.log('[handleSelect] Fetching semantic similar blobs for own blob:', blob.id);
+        const res = await fetch(`/api/stream?entry_id=${blob.id}`);
+        if (!res.ok) {
+          console.log('[handleSelect] Fetch failed with status:', res.status);
+          return;
+        }
+        const similar: Entry[] = await res.json();
+        console.log('[handleSelect] Got semantic similar blobs:', similar.length, similar);
+        const ts = Date.now();
+        for (const s of similar) {
+          if (s.id !== blob.id) {
+            console.log('[handleSelect] Setting similarity glow for:', s.id);
+            similarityGlowMapRef.current.set(s.id, ts);
+          }
+        }
+      } catch (err) {
+        console.error('[handleSelect] Fetch error:', err);
+      }
     } else {
       // Show resonate option for other people's blobs
       setSimilarPanel({ blob, moments: [], loading: false });
@@ -511,6 +532,19 @@ export default function Mural() {
           </div>
         </div>
       )}
+
+      {/* Helper text */}
+      <div className="absolute bottom-6 left-6 pointer-events-none">
+        {similarPanel && !similarPanel.blob.user_id || similarPanel?.blob.user_id !== userIdRef.current ? (
+          <p className="text-white/40 text-xs leading-relaxed max-w-xs">
+            blobs with outlines are yours • click to read others' echoes • double tap to resonate
+          </p>
+        ) : (
+          <p className="text-white/40 text-xs leading-relaxed max-w-xs">
+            blobs with outlines are yours • click to read others' echoes
+          </p>
+        )}
+      </div>
     </div>
   );
 }
