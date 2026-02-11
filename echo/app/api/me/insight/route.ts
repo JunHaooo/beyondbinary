@@ -56,7 +56,7 @@ ${messages.map((m, i) => `${i + 1}. "${m}"`).join('\n')}
 Write a warm 2-3 sentence reflection in second person. Focus on patterns you notice, not judgment. Tone: kind, observant, validating. Avoid clinical language or prescriptive advice. Write only the reflection, no preamble.`;
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
     const result = await model.generateContent(prompt);
     const insight = result.response.text().trim();
 
