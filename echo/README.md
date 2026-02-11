@@ -67,12 +67,12 @@ Create a `.env` file in the project root:
 ```env
 DATABASE_URL='postgresql://...'
 GEMINI_API_KEY='...'
-OOGLE_CLOUD_KEY_JSON='...'
+GOOGLE_CLOUD_KEY_JSON='...'
 ```
 
 - `DATABASE_URL` — your Neon connection string (from the Neon dashboard)
 - `GEMINI_API_KEY` — from [Google AI Studio](https://aistudio.google.com)
-- 'GOOGLE_CLOUD_KEY_JSON' — your Google Cloud service account JSON key (must have Cloud Speech-to-Text API enabled)
+- `GOOGLE_CLOUD_KEY_JSON` — your Google Cloud service account JSON key (must have Cloud Speech-to-Text API enabled)
 
 To get the Google Cloud key:
 1. Go to Google Cloud Console
