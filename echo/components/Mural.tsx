@@ -49,18 +49,57 @@ export default function Mural() {
 
   // All canvas-driving state lives in refs so the RAF loop never goes stale
   const entriesRef = useRef<Entry[]>([]);
+  /** Map of id -> animated display position / timeline info */
+  const displayPosRef = useRef<Map<string, {
+    startX: number;
+    startY: number;
+    targetX: number;
+    targetY: number;
+    startTs: number;
+    delay: number;
+    duration: number;
+    finished: boolean;
+  }>>(new Map());
+  // View transform: zoom and center in reference coords
+  const viewScaleRef = useRef<number>(1);
+  const viewCenterRef = useRef<{ x: number; y: number }>({ x: REF_W / 2, y: REF_H / 2 });
   const userIdRef = useRef<string | null>(null);
   const highlightedRef = useRef<string | null>(null);
   /** id → timestamp when resonance glow started (scales + pulses) */
   const glowMapRef = useRef<Map<string, number>>(new Map());
-  /** id → timestamp when similarity glow started (just glow, no scaling) */
-  const similarityGlowMapRef = useRef<Map<string, number>>(new Map());
+  /** id → { ts, similarity } when similarity glow started (just glow, no scaling) */
+  const similarityGlowMapRef = useRef<Map<string, { ts: number; similarity: number }>>(new Map());
   const lastTapRef = useRef<{ id: string; time: number } | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [similarPanel, setSimilarPanel] = useState<SimilarPanel | null>(null);
   const [panelVisible, setPanelVisible] = useState(false);
+
+  // Exposed controls (JSX handlers) to zoom programmatically
+  const zoomAround = (factor: number, cssX?: number, cssY?: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const cssW = canvas.offsetWidth;
+    const cssH = canvas.offsetHeight;
+    const base = Math.min(cssW / REF_W, cssH / REF_H);
+    const oldScale = viewScaleRef.current;
+    const newScale = Math.max(0.25, Math.min(6, oldScale * factor));
+    const focusX = cssX === undefined ? cssW / 2 : cssX;
+    const focusY = cssY === undefined ? cssH / 2 : cssY;
+    const effectiveOld = base * oldScale;
+    const rx = (focusX - cssW / 2) / effectiveOld + viewCenterRef.current.x;
+    const ry = (focusY - cssH / 2) / effectiveOld + viewCenterRef.current.y;
+    const effectiveNew = base * newScale;
+    viewCenterRef.current.x = rx - (focusX - cssW / 2) / effectiveNew;
+    viewCenterRef.current.y = ry - (focusY - cssH / 2) / effectiveNew;
+    viewScaleRef.current = newScale;
+  };
+
+  const resetView = () => {
+    viewScaleRef.current = 1;
+    viewCenterRef.current = { x: REF_W / 2, y: REF_H / 2 };
+  };
 
   // Record a resonance and trigger a glow burst
   const handleResonate = useCallback(async (targetId: string) => {
@@ -127,11 +166,48 @@ export default function Mural() {
         const similar: Entry[] = await res.json();
         console.log('[handleSelect] Got semantic similar blobs:', similar.length, similar);
         const ts = Date.now();
+        const knownIds = new Set(entriesRef.current.map((e) => e.id));
+        const targets = Array.from(displayPosRef.current.values()).map((m) => ({ x: m.targetX, y: m.targetY }));
         for (const s of similar) {
-          if (s.id !== blob.id) {
-            console.log('[handleSelect] Setting similarity glow for:', s.id);
-            similarityGlowMapRef.current.set(s.id, ts);
+          if (s.id === blob.id) continue;
+          // If the similar entry is not present locally, insert it at the spiral tail
+          if (!knownIds.has(s.id)) {
+            const centerX = REF_W / 2;
+            const centerY = REF_H / 2;
+            const angleStep = 0.45;
+            const spiralSeparation = Math.max(44, BLOB_RADIUS * 2 + 12);
+            const minDist = Math.max(Math.ceil(BLOB_RADIUS * 4.2), BLOB_RADIUS * 2 + 24);
+            const idx = entriesRef.current.length;
+            let angle = idx * angleStep;
+            let radius = spiralSeparation * angle + 16;
+            let tx = Math.round(centerX + Math.cos(angle) * radius);
+            let ty = Math.round(centerY + Math.sin(angle) * radius);
+            const deltaAngle = 0.25;
+            for (let pass = 0; pass < 24; pass++) {
+              const clash = targets.find((t) => Math.hypot(t.x - tx, t.y - ty) < minDist);
+              if (!clash) break;
+              angle += deltaAngle;
+              radius = spiralSeparation * angle + 16;
+              tx = Math.round(centerX + Math.cos(angle) * radius);
+              ty = Math.round(centerY + Math.sin(angle) * radius);
+            }
+            entriesRef.current.push(s);
+            const now2 = Date.now();
+            displayPosRef.current.set(s.id, {
+              startX: tx,
+              startY: ty,
+              targetX: tx,
+              targetY: ty,
+              startTs: now2,
+              delay: 0,
+              duration: 200,
+              finished: true,
+            });
+            knownIds.add(s.id);
+            targets.push({ x: tx, y: ty });
           }
+          console.log('[handleSelect] Setting similarity glow for:', s.id, 'similarity=', s.similarity);
+          similarityGlowMapRef.current.set(s.id, { ts, similarity: (s as any).similarity ?? 0.6 });
         }
       } catch (err) {
         console.error('[handleSelect] Fetch error:', err);
@@ -151,11 +227,47 @@ export default function Mural() {
         const similar: Entry[] = await res.json();
         console.log('[handleSelect] Got similar blobs:', similar.length, similar);
         const ts = Date.now();
+        const knownIds = new Set(entriesRef.current.map((e) => e.id));
+        const targets = Array.from(displayPosRef.current.values()).map((m) => ({ x: m.targetX, y: m.targetY }));
         for (const s of similar) {
-          if (s.id !== blob.id) {
-            console.log('[handleSelect] Setting similarity glow for:', s.id);
-            similarityGlowMapRef.current.set(s.id, ts);
+          if (s.id === blob.id) continue;
+          if (!knownIds.has(s.id)) {
+            const centerX = REF_W / 2;
+            const centerY = REF_H / 2;
+            const angleStep = 0.45;
+            const spiralSeparation = Math.max(28, BLOB_RADIUS * 2 + 8);
+            const minDist = Math.max(Math.ceil(BLOB_RADIUS * 3.2), BLOB_RADIUS * 2 + 12);
+            const idx = entriesRef.current.length;
+            let angle = idx * angleStep;
+            let radius = spiralSeparation * angle + 12;
+            let tx = Math.round(centerX + Math.cos(angle) * radius);
+            let ty = Math.round(centerY + Math.sin(angle) * radius);
+            const deltaAngle = 0.25;
+            for (let pass = 0; pass < 24; pass++) {
+              const clash = targets.find((t) => Math.hypot(t.x - tx, t.y - ty) < minDist);
+              if (!clash) break;
+              angle += deltaAngle;
+              radius = spiralSeparation * angle + 12;
+              tx = Math.round(centerX + Math.cos(angle) * radius);
+              ty = Math.round(centerY + Math.sin(angle) * radius);
+            }
+            entriesRef.current.push(s);
+            const now2 = Date.now();
+            displayPosRef.current.set(s.id, {
+              startX: tx,
+              startY: ty,
+              targetX: tx,
+              targetY: ty,
+              startTs: now2,
+              delay: 0,
+              duration: 200,
+              finished: true,
+            });
+            knownIds.add(s.id);
+            targets.push({ x: tx, y: ty });
           }
+          console.log('[handleSelect] Setting similarity glow for:', s.id, 'similarity=', s.similarity);
+          similarityGlowMapRef.current.set(s.id, { ts, similarity: (s as any).similarity ?? 0.6 });
         }
       } catch (err) {
         console.error('[handleSelect] Fetch error:', err);
@@ -178,6 +290,9 @@ export default function Mural() {
       })
       .then((data: Entry[]) => {
         entriesRef.current = data;
+        // Arrange entries into a spiral and reset their visible positions so
+        // they animate in from the center start point.
+        scheduleSpiralPositions(data);
         setLoading(false);
       })
       .catch(() => {
@@ -185,6 +300,75 @@ export default function Mural() {
         setLoading(false);
       });
   }, []);
+
+  // Compute spiral targets for a list of entries and populate displayPosRef
+  function scheduleSpiralPositions(entries: Entry[]) {
+    const now = Date.now();
+    const centerX = REF_W / 2;
+    const centerY = REF_H / 2;
+
+      // Use an Archimedean spiral (r = k * theta) so the circular spiral is obvious
+      const angleStep = 0.45; // radians between points (~26deg) — tighter spiral
+      // Increase separation to account for visual blob size at the center
+      const spiralSeparation = Math.max(44, BLOB_RADIUS * 2 + 12); // radial spacing per radian (further increased)
+      // Require a significantly larger minimum pixel gap to avoid early-center congestion
+      const minDist = Math.max(Math.ceil(BLOB_RADIUS * 4.2), BLOB_RADIUS * 2 + 24);
+
+      displayPosRef.current.clear();
+      const targets: { x: number; y: number }[] = [];
+
+      const computeTargetForIndex = (index: number) => {
+        // Keep points on an Archimedean spiral: r = k * theta
+        // If there's a collision, advance the angle slightly so the point moves along
+        // the spiral rather than jumping radially — preserves a smooth spiral layout.
+        let angle = index * angleStep;
+        const baseOffset = 16;
+        let radius = spiralSeparation * angle + baseOffset;
+        let tx = Math.round(centerX + Math.cos(angle) * radius);
+        let ty = Math.round(centerY + Math.sin(angle) * radius);
+        // Advance along the spiral on collision
+        const deltaAngle = 0.25; // radians to advance per nudge
+        for (let pass = 0; pass < 24; pass++) {
+          const clash = targets.find((t) => Math.hypot(t.x - tx, t.y - ty) < minDist);
+          if (!clash) break;
+          angle += deltaAngle;
+          radius = spiralSeparation * angle + baseOffset;
+          tx = Math.round(centerX + Math.cos(angle) * radius);
+          ty = Math.round(centerY + Math.sin(angle) * radius);
+        }
+        return { tx, ty };
+      };
+
+      // If any entries are very recent (just created), place them at the tail
+      // so returning from submit doesn't animate the new blob from the center.
+      const RECENT_MS = 5000;
+      let tailIndex = entries.length;
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        const createdAt = e.created_at ? new Date(e.created_at).getTime() : 0;
+        const isRecent = Date.now() - createdAt < RECENT_MS;
+
+        // Choose index: recent items go to the tail, others use their ordinal
+        const useIndex = isRecent ? tailIndex++ : i;
+        const { tx, ty } = computeTargetForIndex(useIndex);
+        targets.push({ x: tx, y: ty });
+
+        // Animate from the center for older items; for recent items show immediately
+        const delay = (isRecent ? 0 : i * 70);
+        const duration = isRecent ? 200 : 600 + Math.min(500, i * 8);
+
+        displayPosRef.current.set(e.id, {
+          startX: isRecent ? tx : centerX,
+          startY: isRecent ? ty : centerY,
+          targetX: tx,
+          targetY: ty,
+          startTs: now,
+          delay,
+          duration,
+          finished: isRecent,
+        });
+      }
+  }
 
   // Poll for recent resonances to show incoming pulses
   useEffect(() => {
@@ -210,6 +394,38 @@ export default function Mural() {
 
     const interval = setInterval(pollResonate, 2000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Poll for new entries and insert them at the spiral tail so newer blobs
+  // appear around the outer spiral instead of crowding the center.
+  useEffect(() => {
+    let running = true;
+
+    const pollNew = async () => {
+      try {
+        const res = await fetch('/api/stream');
+        if (!res.ok) return;
+        const data: Entry[] = await res.json();
+        if (!running) return;
+        const known = new Set(entriesRef.current.map((e) => e.id));
+        // stream returns newest first; we want to insert oldest->newest so reverse
+        const newItems = data.filter((d) => !known.has(d.id)).reverse();
+        for (const item of newItems) {
+          insertEntryAtTail(item);
+        }
+      } catch {
+        // fail silently
+      }
+    };
+
+    // initial poll shortly after mount to pick up entries created while user navigated
+    const id = setInterval(pollNew, 2500);
+    // also run once immediately
+    pollNew();
+    return () => {
+      running = false;
+      clearInterval(id);
+    };
   }, []);
 
     // Canvas setup, RAF loop, event listeners — initialised once on mount
@@ -243,9 +459,13 @@ export default function Mural() {
         return;
       }
 
-      const scaleX = cssW / REF_W;
-      const scaleY = cssH / REF_H;
-      const blobR = BLOB_RADIUS * Math.min(scaleX, scaleY);
+      const baseScaleX = cssW / REF_W;
+      const baseScaleY = cssH / REF_H;
+      // Use uniform base scale (preserve aspect), then apply view scale
+      const baseScale = Math.min(baseScaleX, baseScaleY);
+      const viewScale = viewScaleRef.current;
+      const effectiveScale = baseScale * viewScale;
+      const blobR = BLOB_RADIUS * effectiveScale;
       const now = Date.now();
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -257,8 +477,31 @@ export default function Mural() {
       ctx.fillRect(0, 0, cssW, cssH);
 
       for (const entry of entriesRef.current) {
-        const x = entry.x * scaleX;
-        const y = entry.y * scaleY;
+        // Compute displayed reference-space position (animated from spawn)
+        const disp = (() => {
+          const meta = displayPosRef.current.get(entry.id);
+          if (!meta) return { rx: entry.x, ry: entry.y };
+          const elapsed = now - meta.startTs;
+          const tRaw = (elapsed - meta.delay) / meta.duration;
+          const t = Math.max(0, Math.min(1, tRaw));
+          // smooth easing
+          const ease = 0.5 - 0.5 * Math.cos(Math.PI * t);
+          const rx = meta.startX + (meta.targetX - meta.startX) * ease;
+          const ry = meta.startY + (meta.targetY - meta.startY) * ease;
+          if (t >= 1 && !meta.finished) {
+            meta.finished = true;
+            // commit final ref coords back to the entry for persistence
+            entry.x = meta.targetX;
+            entry.y = meta.targetY;
+            displayPosRef.current.set(entry.id, meta);
+          }
+          return { rx, ry };
+        })();
+
+        // Map reference coords to CSS pixel space with view transform
+        const vc = viewCenterRef.current;
+        const x = (disp.rx - vc.x) * effectiveScale + cssW / 2;
+        const y = (disp.ry - vc.y) * effectiveScale + cssH / 2;
         const isHighlighted = highlightedRef.current === entry.id;
         const isOwnBlob =
           !!entry.user_id && entry.user_id === userIdRef.current;
@@ -266,8 +509,8 @@ export default function Mural() {
         const glowAge = glowStart !== undefined ? now - glowStart : -1;
         const isGlowing = glowAge >= 0 && glowAge < GLOW_DURATION;
 
-        const similarityGlowStart = similarityGlowMapRef.current.get(entry.id);
-        const similarityGlowAge = similarityGlowStart !== undefined ? now - similarityGlowStart : -1;
+        const similarityGlowObj = similarityGlowMapRef.current.get(entry.id);
+        const similarityGlowAge = similarityGlowObj !== undefined ? now - similarityGlowObj.ts : -1;
         const isSimilarityGlowing = similarityGlowAge >= 0 && similarityGlowAge < GLOW_DURATION;
 
         // Expire finished glows
@@ -298,10 +541,25 @@ export default function Mural() {
           ctx.fillStyle = entry.color + 'bb';
         } else if (isSimilarityGlowing) {
           const t = similarityGlowAge / GLOW_DURATION;
-          // Similarity glow: soft glow that fades out, no pulsing
+          // Similarity glow: intensity depends on similarity magnitude and fades out
+          const fade = 1 - t;
+          const sim = similarityGlowObj?.similarity ?? 0.6;
+          // Map similarity to three tiers: very similar (>0.85), pretty (>0.7), slight (>0.5)
+          let blur = 14 * fade;
+          let alphaSuffix = 'aa';
+          if (sim > 0.85) {
+            blur = 84 * fade; // very bright (doubled)
+            alphaSuffix = 'ff';
+          } else if (sim > 0.7) {
+            blur = 56 * fade; // bright (doubled)
+            alphaSuffix = 'ff';
+          } else if (sim > 0.5) {
+            blur = 32 * fade; // slightly bright (doubled)
+            alphaSuffix = 'dd';
+          }
           ctx.shadowColor = entry.color;
-          ctx.shadowBlur = 18 * (1 - t); // fade out over time
-          ctx.fillStyle = entry.color + 'aa'; // slightly transparent
+          ctx.shadowBlur = blur;
+          ctx.fillStyle = entry.color + alphaSuffix;
         } else if (isOwnBlob) {
           ctx.shadowBlur = 0;
           ctx.fillStyle = entry.color; // full opacity for own blobs
@@ -347,16 +605,75 @@ export default function Mural() {
     // ── Shared helpers ──────────────────────────────────────────────────────
 
     /** Convert a CSS-pixel canvas position to reference coords */
-    const toRef = (cssX: number, cssY: number) => ({
-      rx: cssX * (REF_W / canvas.offsetWidth),
-      ry: cssY * (REF_H / canvas.offsetHeight),
-    });
+    const toRef = (cssX: number, cssY: number) => {
+      const cssW = canvas.offsetWidth;
+      const cssH = canvas.offsetHeight;
+      const base = Math.min(cssW / REF_W, cssH / REF_H);
+      const effective = base * viewScaleRef.current;
+      const vc = viewCenterRef.current;
+      const rx = (cssX - cssW / 2) / effective + vc.x;
+      const ry = (cssY - cssH / 2) / effective + vc.y;
+      return { rx, ry };
+    };
 
     /** Find the topmost blob within HIT_RADIUS of (rx, ry) in ref space */
     const findBlob = (rx: number, ry: number): Entry | null => {
+      const nowTs = Date.now();
       for (let i = entriesRef.current.length - 1; i >= 0; i--) {
         const e = entriesRef.current[i];
-        if (Math.hypot(e.x - rx, e.y - ry) <= HIT_RADIUS) return e;
+        const meta = displayPosRef.current.get(e.id);
+        let ex = e.x;
+        let ey = e.y;
+        if (meta) {
+          const elapsed = nowTs - meta.startTs;
+
+    // Insert a single new entry and place it at the spiral tail (so newer blobs appear at the outer spiral)
+    const insertEntryAtTail = (entry: Entry) => {
+      // Build a local targets array from current displayPos
+      const targets = Array.from(displayPosRef.current.values()).map((m) => ({ x: m.targetX, y: m.targetY }));
+      const centerX = REF_W / 2;
+      const centerY = REF_H / 2;
+      const angleStep = 0.45;
+      const spiralSeparation = Math.max(28, BLOB_RADIUS * 2 + 8);
+      const minDist = Math.max(Math.ceil(BLOB_RADIUS * 3.2), BLOB_RADIUS * 2 + 12);
+
+      const idx = entriesRef.current.length; // next index at tail
+      let angle = idx * angleStep;
+      const baseOffset = 16;
+      let radius = spiralSeparation * angle + baseOffset;
+      let tx = Math.round(centerX + Math.cos(angle) * radius);
+      let ty = Math.round(centerY + Math.sin(angle) * radius);
+      const deltaAngle = 0.25;
+      for (let pass = 0; pass < 24; pass++) {
+        const clash = targets.find((t) => Math.hypot(t.x - tx, t.y - ty) < minDist);
+        if (!clash) break;
+        angle += deltaAngle;
+        radius = spiralSeparation * angle + baseOffset;
+        tx = Math.round(centerX + Math.cos(angle) * radius);
+        ty = Math.round(centerY + Math.sin(angle) * radius);
+      }
+
+      // Add into entries and display map. Place start at the target so center isn't cluttered.
+      entriesRef.current.push(entry);
+      const now = Date.now();
+      displayPosRef.current.set(entry.id, {
+        startX: tx,
+        startY: ty,
+        targetX: tx,
+        targetY: ty,
+        startTs: now,
+        delay: 0,
+        duration: 200,
+        finished: true,
+      });
+    };
+          const tRaw = (elapsed - meta.delay) / meta.duration;
+          const t = Math.max(0, Math.min(1, tRaw));
+          const ease = 0.5 - 0.5 * Math.cos(Math.PI * t);
+          ex = meta.startX + (meta.targetX - meta.startX) * ease;
+          ey = meta.startY + (meta.targetY - meta.startY) * ease;
+        }
+        if (Math.hypot(ex - rx, ey - ry) <= HIT_RADIUS) return e;
       }
       return null;
     };
@@ -400,6 +717,34 @@ export default function Mural() {
     canvas.addEventListener('click', handleClick);
     canvas.addEventListener('dblclick', handleDblClick);
     canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+    // Wheel to zoom (keep focused point stable)
+    const setViewScale = (newScale: number, focusCssX?: number, focusCssY?: number) => {
+      const cssW = canvas.offsetWidth;
+      const cssH = canvas.offsetHeight;
+      const base = Math.min(cssW / REF_W, cssH / REF_H);
+      const oldScale = viewScaleRef.current;
+      newScale = Math.max(0.25, Math.min(6, newScale));
+      if (focusCssX !== undefined && focusCssY !== undefined) {
+        const effectiveOld = base * oldScale;
+        const rx = (focusCssX - cssW / 2) / effectiveOld + viewCenterRef.current.x;
+        const ry = (focusCssY - cssH / 2) / effectiveOld + viewCenterRef.current.y;
+        const effectiveNew = base * newScale;
+        viewCenterRef.current.x = rx - (focusCssX - cssW / 2) / effectiveNew;
+        viewCenterRef.current.y = ry - (focusCssY - cssH / 2) / effectiveNew;
+      }
+      viewScaleRef.current = newScale;
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const cssX = e.clientX - rect.left;
+      const cssY = e.clientY - rect.top;
+      const delta = -e.deltaY; // wheel up => zoom in
+      const factor = Math.exp(delta * 0.0014);
+      setViewScale(viewScaleRef.current * factor, cssX, cssY);
+    };
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
 
     return () => {
       cancelAnimationFrame(animId);
@@ -407,6 +752,7 @@ export default function Mural() {
       canvas.removeEventListener('click', handleClick);
       canvas.removeEventListener('dblclick', handleDblClick);
       canvas.removeEventListener('touchend', handleTouchEnd);
+      canvas.removeEventListener('wheel', handleWheel as any);
     };
   }, []); // runs once — all mutable state is in refs
 
@@ -417,6 +763,31 @@ export default function Mural() {
         className="w-full h-full"
         style={{ touchAction: 'none' }}
       />
+
+      {/* Zoom controls */}
+      <div className="absolute top-20 right-4 z-30 flex flex-col gap-2">
+        <button
+          onClick={() => zoomAround(1.25)}
+          className="w-9 h-9 bg-white/8 hover:bg-white/16 text-white rounded-md flex items-center justify-center"
+          aria-label="Zoom in"
+        >
+          +
+        </button>
+        <button
+          onClick={() => zoomAround(1 / 1.25)}
+          className="w-9 h-9 bg-white/8 hover:bg-white/16 text-white rounded-md flex items-center justify-center"
+          aria-label="Zoom out"
+        >
+          −
+        </button>
+        <button
+          onClick={() => resetView()}
+          className="w-9 h-9 bg-white/6 hover:bg-white/16 text-white rounded-md flex items-center justify-center text-xs"
+          aria-label="Reset view"
+        >
+          reset
+        </button>
+      </div>
 
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">

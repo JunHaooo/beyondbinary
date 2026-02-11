@@ -16,7 +16,8 @@ export async function GET(req: NextRequest) {
         WITH target AS (
           SELECT embedding FROM entries WHERE id = ${entryId}
         )
-        SELECT e.id, e.user_id, e.message, e.color, e.shape, e.x, e.y, e.created_at
+        SELECT e.id, e.user_id, e.message, e.color, e.shape, e.x, e.y, e.created_at,
+          (1 - (e.embedding <=> t.embedding)) AS similarity
         FROM entries e
         CROSS JOIN target t
         WHERE e.id != ${entryId}
@@ -24,7 +25,7 @@ export async function GET(req: NextRequest) {
           AND (e.embedding <=> t.embedding) < 0.5
         ORDER BY e.embedding <=> t.embedding
         LIMIT 8
-      `) as Entry[];
+      `);
       return NextResponse.json(similar);
     }
 

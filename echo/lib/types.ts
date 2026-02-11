@@ -9,6 +9,7 @@ export interface Entry {
   x: number;
   y: number;
   created_at: string;
+  similarity?: number | null;
 }
 
 export interface Resonance {
