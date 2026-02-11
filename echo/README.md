@@ -67,10 +67,18 @@ Create a `.env` file in the project root:
 ```env
 DATABASE_URL='postgresql://...'
 GEMINI_API_KEY='...'
+OOGLE_CLOUD_KEY_JSON='...'
 ```
 
 - `DATABASE_URL` — your Neon connection string (from the Neon dashboard)
 - `GEMINI_API_KEY` — from [Google AI Studio](https://aistudio.google.com)
+- 'GOOGLE_CLOUD_KEY_JSON' — your Google Cloud service account JSON key (must have Cloud Speech-to-Text API enabled)
+
+To get the Google Cloud key:
+1. Go to Google Cloud Console
+2. Create a service account or use existing one
+3. Enable Cloud Speech-to-Text API
+4. Generate a new JSON key and paste the entire object as the value
 
 ### 3. Run the database migration
 
