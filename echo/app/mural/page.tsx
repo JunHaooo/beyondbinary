@@ -1,5 +1,6 @@
-import Link from 'next/link';
-import Mural from '@/components/Mural';
+import Link from "next/link";
+import Mural from "@/components/Mural";
+import SiriRecorder from "@/components/SiriRecorder";
 
 export default function MuralPage() {
   return (

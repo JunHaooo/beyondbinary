@@ -370,6 +370,54 @@ export default function Mural() {
       }
   }
 
+  // Insert a single new entry and place it at the spiral tail
+  function insertEntryAtTail(entry: Entry) {
+    const targets = Array.from(displayPosRef.current.values()).map((m) => ({
+      x: m.targetX,
+      y: m.targetY,
+    }));
+
+    const centerX = REF_W / 2;
+    const centerY = REF_H / 2;
+    const angleStep = 0.45;
+    const spiralSeparation = Math.max(28, BLOB_RADIUS * 2 + 8);
+    const minDist = Math.max(Math.ceil(BLOB_RADIUS * 3.2), BLOB_RADIUS * 2 + 12);
+
+    const idx = entriesRef.current.length;
+    let angle = idx * angleStep;
+    const baseOffset = 16;
+    let radius = spiralSeparation * angle + baseOffset;
+
+    let tx = Math.round(centerX + Math.cos(angle) * radius);
+    let ty = Math.round(centerY + Math.sin(angle) * radius);
+
+    const deltaAngle = 0.25;
+    for (let pass = 0; pass < 24; pass++) {
+      const clash = targets.find((t) => Math.hypot(t.x - tx, t.y - ty) < minDist);
+      if (!clash) break;
+      angle += deltaAngle;
+      radius = spiralSeparation * angle + baseOffset;
+      tx = Math.round(centerX + Math.cos(angle) * radius);
+      ty = Math.round(centerY + Math.sin(angle) * radius);
+    }
+
+    entriesRef.current.push(entry);
+
+    const now = Date.now();
+    displayPosRef.current.set(entry.id, {
+      startX: tx,
+      startY: ty,
+      targetX: tx,
+      targetY: ty,
+      startTs: now,
+      delay: 0,
+      duration: 200,
+      finished: true,
+    });
+  }
+
+
+
   // Poll for recent resonances to show incoming pulses
   useEffect(() => {
     const pollResonate = async () => {
