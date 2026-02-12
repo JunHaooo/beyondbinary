@@ -9,6 +9,7 @@ export interface EmotionAnalysis {
   intensity: number;
   category: 'work' | 'relationships' | 'self';
   embedding: number[];
+  error: '' | 'self-harm' | 'violence to others';
 }
 
 type GeminiEmotion = Omit<EmotionAnalysis, 'embedding'>;
@@ -32,6 +33,7 @@ async function analyseEmotion(message: string): Promise<GeminiEmotion> {
     shape: 'smooth',
     intensity: 5,
     category: 'self',
+    error: '',
   };
 
   try {
@@ -46,9 +48,13 @@ Rules for mapping:
 - intensity: 1-10 scale, where 1 is barely felt and 10 is overwhelming
 - category: "work" for school/job/career, "relationships" for people/family/friends, "self" for internal/identity/health
 
+IMPORTANT CATCH:
+- If the expression involves any EXTREME sentiments (violence to others, self-harm), map error to exact extreme sentiment
+- If not, map error to ''
+
 Message: "${message}"
 
-Return JSON: {"color": "#RRGGBB", "shape": "spiky|smooth|jagged", "intensity": 1-10, "category": "work|relationships|self"}`;
+Return JSON: {"color": "#RRGGBB", "shape": "spiky|smooth|jagged", "intensity": 1-10, "category": "work|relationships|self", "error": "''|self-harm|violence to others"}`;
 
     const result = await model.generateContent(prompt);
     let raw = result.response.text().trim();

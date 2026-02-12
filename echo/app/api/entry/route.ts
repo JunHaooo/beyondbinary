@@ -23,7 +23,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'text exceeds 284 characters' }, { status: 400 });
     }
 
-    const analysis = await analyseEntry(text.trim());
+    const analysis = await analyseEntry(text.trim()); // analysis = {...emotion, embedding}
+
+    if (analysis.error !== '') {
+      return Response.json({ blockedFor: analysis.error });
+    }
 
     const x = Math.floor(Math.random() * CANVAS_WIDTH);
     const y = Math.floor(Math.random() * CANVAS_HEIGHT);

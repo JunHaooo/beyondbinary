@@ -20,12 +20,32 @@ interface BlobResult {
 }
 
 type Status = "idle" | "loading" | "success" | "error";
+type BlockedReason = "self-harm" | "violence to others";
+
+const BLOCKED_CONTENT: Record<
+  BlockedReason,
+  { heading: string; body: string; resources?: { label: string; detail: string }[] }
+> = {
+  "self-harm": {
+    heading: "we hear you.",
+    body: "what you're carrying sounds really heavy. echo can't hold this one — but you don't have to hold it alone.",
+    resources: [
+      { label: "National Mental Health Helpline", detail: "call 1771 or Whatsapp 6669 1771" },
+      { label: "Samaritans of Singapore", detail: "call 1767" },
+    ],
+  },
+  "violence to others": {
+    heading: "that's a lot of intensity.",
+    body: "echo can't hold this one — but those feelings are real. consider talking to someone you trust, or a counsellor who can help you work through them.",
+  },
+};
 
 export default function SubmitPage() {
   const [text, setText] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [result, setResult] = useState<BlobResult | null>(null);
   const [visible, setVisible] = useState(false);
+  const [blockedReason, setBlockedReason] = useState<BlockedReason | null>(null);
   const router = useRouter();
   const redirectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -54,10 +74,17 @@ export default function SubmitPage() {
         body: JSON.stringify({ text: text.trim(), user_id: getUserId() }),
       });
 
+      const data = await res.json();
+
+      if (data.blockedFor === "self-harm" || data.blockedFor === "violence to others") {
+        setBlockedReason(data.blockedFor as BlockedReason);
+        setStatus("idle");
+        return;
+      }
+
       if (!res.ok) throw new Error("api error");
 
-      const data: BlobResult = await res.json();
-      setResult(data);
+      setResult(data as BlobResult);
       setStatus("success");
     } catch {
       setStatus("error");
@@ -102,6 +129,8 @@ export default function SubmitPage() {
   }
 
   // ── Input view ───────────────────────────────────────────────────────────
+  const blocked = blockedReason ? BLOCKED_CONTENT[blockedReason] : null;
+
   return (
     <div className="min-h-screen bg-[#0a0a0f] flex flex-col p-6">
       {/* Voice recorder overlay */}
@@ -115,6 +144,49 @@ export default function SubmitPage() {
         }}
       />
 
+      {/* Extreme sentiment modal */}
+      {blocked && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+          onClick={() => setBlockedReason(null)}
+        >
+          <div
+            className="w-full max-w-sm bg-[#111118] border border-white/10 rounded-2xl p-6 flex flex-col gap-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <p className="text-white/80 text-sm tracking-wide">{blocked.heading}</p>
+              <button
+                onClick={() => setBlockedReason(null)}
+                className="text-white/30 hover:text-white/60 transition-colors text-lg leading-none shrink-0"
+                aria-label="close"
+              >
+                ×
+              </button>
+            </div>
+
+            <p className="text-white/50 text-sm leading-relaxed">{blocked.body}</p>
+
+            {blocked.resources && (
+              <div className="flex flex-col gap-2 pt-1">
+                {blocked.resources.map((r) => (
+                  <div key={r.label} className="border border-white/10 rounded-xl px-4 py-3">
+                    <p className="text-white/70 text-xs tracking-wide">{r.label}</p>
+                    <p className="text-white/35 text-xs mt-0.5">{r.detail}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button
+              onClick={() => setBlockedReason(null)}
+              className="w-full py-3 mt-1 rounded-xl border border-white/10 text-white/40 text-xs tracking-widest uppercase hover:text-white/60 hover:border-white/20 transition-all"
+            >
+              close
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Nav */}
       <div className="flex items-center justify-between mb-12">

@@ -180,7 +180,7 @@ export default function Mural() {
             const centerX = REF_W / 2;
             const centerY = REF_H / 2;
             const angleStep = 0.45;
-            const spiralSeparation = Math.max(44, BLOB_RADIUS * 2 + 12);
+            const spiralSeparation = Math.max(22, BLOB_RADIUS + 6);
             const minDist = Math.max(Math.ceil(BLOB_RADIUS * 4.2), BLOB_RADIUS * 2 + 24);
             const idx = entriesRef.current.length;
             let angle = idx * angleStep;
@@ -240,7 +240,7 @@ export default function Mural() {
             const centerX = REF_W / 2;
             const centerY = REF_H / 2;
             const angleStep = 0.45;
-            const spiralSeparation = Math.max(28, BLOB_RADIUS * 2 + 8);
+            const spiralSeparation = Math.max(14, BLOB_RADIUS + 4);
             const minDist = Math.max(Math.ceil(BLOB_RADIUS * 3.2), BLOB_RADIUS * 2 + 12);
             const idx = entriesRef.current.length;
             let angle = idx * angleStep;
@@ -315,7 +315,7 @@ export default function Mural() {
       // Use an Archimedean spiral (r = k * theta) so the circular spiral is obvious
       const angleStep = 0.45; // radians between points (~26deg) — tighter spiral
       // Increase separation to account for visual blob size at the center
-      const spiralSeparation = Math.max(44, BLOB_RADIUS * 2 + 12); // radial spacing per radian (further increased)
+      const spiralSeparation = Math.max(22, BLOB_RADIUS + 6); // radial spacing per radian (further increased)
       // Require a significantly larger minimum pixel gap to avoid early-center congestion
       const minDist = Math.max(Math.ceil(BLOB_RADIUS * 4.2), BLOB_RADIUS * 2 + 24);
 
@@ -385,7 +385,7 @@ export default function Mural() {
     const centerX = REF_W / 2;
     const centerY = REF_H / 2;
     const angleStep = 0.45;
-    const spiralSeparation = Math.max(28, BLOB_RADIUS * 2 + 8);
+    const spiralSeparation = Math.max(14, BLOB_RADIUS + 4);
     const minDist = Math.max(Math.ceil(BLOB_RADIUS * 3.2), BLOB_RADIUS * 2 + 12);
 
     const idx = entriesRef.current.length;
@@ -687,7 +687,7 @@ export default function Mural() {
       const centerX = REF_W / 2;
       const centerY = REF_H / 2;
       const angleStep = 0.45;
-      const spiralSeparation = Math.max(28, BLOB_RADIUS * 2 + 8);
+      const spiralSeparation = Math.max(14, BLOB_RADIUS + 4);
       const minDist = Math.max(Math.ceil(BLOB_RADIUS * 3.2), BLOB_RADIUS * 2 + 12);
 
       const idx = entriesRef.current.length; // next index at tail
