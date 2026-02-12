@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
       WHERE e.user_id = ${userId}
         AND e.id        != ${entryId}
         AND e.embedding IS NOT NULL
-        AND (e.embedding <=> t.embedding) < 0.5
+        AND (e.embedding <=> t.embedding) < 0.4
       ORDER BY e.embedding <=> t.embedding
       LIMIT 5
     `) as SimilarEntry[];

@@ -20,7 +20,7 @@ async function getEmbedder(): Promise<FeatureExtractionPipeline> {
   if (!embedder) {
     embedder = await pipeline(
       'feature-extraction',
-      'Xenova/all-MiniLM-L6-v2'
+      'Xenova/paraphrase-MiniLM-L6-v2'
     ) as FeatureExtractionPipeline;
   }
   return embedder;
