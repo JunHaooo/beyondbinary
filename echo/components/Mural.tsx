@@ -76,6 +76,11 @@ export default function Mural() {
   const [similarPanel, setSimilarPanel] = useState<SimilarPanel | null>(null);
   const [panelVisible, setPanelVisible] = useState(false);
 
+  // Drag panning state
+  const isDraggingRef = useRef(false);
+  const dragStartRef = useRef<{ cssX: number; cssY: number; centerX: number; centerY: number } | null>(null);
+  const lastTouchDistanceRef = useRef<number | null>(null);
+
   // Exposed controls (JSX handlers) to zoom programmatically
   const zoomAround = (factor: number, cssX?: number, cssY?: number) => {
     const canvas = canvasRef.current;
@@ -733,6 +738,134 @@ export default function Mural() {
       if (blob) handleResonate(blob.id);
     };
 
+    const handleMouseDown = (e: MouseEvent) => {
+      // Don't interfere with other mouse buttons or modifier keys
+      if (e.button !== 0) return; // left button only
+      
+      isDraggingRef.current = true;
+      dragStartRef.current = {
+        cssX: e.clientX,
+        cssY: e.clientY,
+        centerX: viewCenterRef.current.x,
+        centerY: viewCenterRef.current.y,
+      };
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current || !dragStartRef.current) return;
+      
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const cssW = canvas.offsetWidth;
+      const cssH = canvas.offsetHeight;
+      const base = Math.min(cssW / REF_W, cssH / REF_H);
+      const effective = base * viewScaleRef.current;
+
+      // Calculate drag delta in CSS pixels
+      const deltaCssX = e.clientX - dragStartRef.current.cssX;
+      const deltaCssY = e.clientY - dragStartRef.current.cssY;
+
+      // Convert CSS delta to reference coords (opposite direction)
+      const deltaRefX = (-deltaCssX) / effective;
+      const deltaRefY = (-deltaCssY) / effective;
+
+      // Update view center
+      viewCenterRef.current.x = dragStartRef.current.centerX + deltaRefX;
+      viewCenterRef.current.y = dragStartRef.current.centerY + deltaRefY;
+    };
+
+    const handleMouseUp = () => {
+      isDraggingRef.current = false;
+      dragStartRef.current = null;
+    };
+
+    const handleMouseLeave = () => {
+      isDraggingRef.current = false;
+      dragStartRef.current = null;
+    };
+
+    const handleTouchStart = (e: TouchEvent) => {
+      lastTouchDistanceRef.current = null;
+      
+      if (e.touches.length === 1) {
+        // Single finger: start drag panning
+        e.preventDefault();
+        const touch = e.touches[0];
+        isDraggingRef.current = true;
+        dragStartRef.current = {
+          cssX: touch.clientX,
+          cssY: touch.clientY,
+          centerX: viewCenterRef.current.x,
+          centerY: viewCenterRef.current.y,
+        };
+      } else if (e.touches.length === 2) {
+        // Two fingers: prepare for pinch zoom
+        isDraggingRef.current = false;
+        dragStartRef.current = null;
+        const touch1 = e.touches[0];
+        const touch2 = e.touches[1];
+        const distance = Math.hypot(
+          touch2.clientX - touch1.clientX,
+          touch2.clientY - touch1.clientY
+        );
+        lastTouchDistanceRef.current = distance;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 1 && isDraggingRef.current && dragStartRef.current) {
+        // Single finger drag: pan
+        e.preventDefault();
+        const touch = e.touches[0];
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        const cssW = canvas.offsetWidth;
+        const cssH = canvas.offsetHeight;
+        const base = Math.min(cssW / REF_W, cssH / REF_H);
+        const effective = base * viewScaleRef.current;
+
+        const deltaCssX = touch.clientX - dragStartRef.current.cssX;
+        const deltaCssY = touch.clientY - dragStartRef.current.cssY;
+
+        const deltaRefX = (-deltaCssX) / effective;
+        const deltaRefY = (-deltaCssY) / effective;
+
+        viewCenterRef.current.x = dragStartRef.current.centerX + deltaRefX;
+        viewCenterRef.current.y = dragStartRef.current.centerY + deltaRefY;
+      } else if (e.touches.length === 2) {
+        // Two finger pinch: zoom
+        e.preventDefault();
+        const touch1 = e.touches[0];
+        const touch2 = e.touches[1];
+        const distance = Math.hypot(
+          touch2.clientX - touch1.clientX,
+          touch2.clientY - touch1.clientY
+        );
+
+        if (lastTouchDistanceRef.current !== null) {
+          const ratio = distance / lastTouchDistanceRef.current;
+          const factor = Math.max(0.8, Math.min(1.2, ratio)); // Limit scale per frame
+          const midCssX = (touch1.clientX + touch2.clientX) / 2;
+          const midCssY = (touch1.clientY + touch2.clientY) / 2;
+          const rect = canvasRef.current?.getBoundingClientRect();
+          if (rect) {
+            setViewScale(viewScaleRef.current * factor, midCssX - rect.left, midCssY - rect.top);
+          }
+        }
+        lastTouchDistanceRef.current = distance;
+      }
+    };
+
+    const handleTouchCancel = () => {
+      isDraggingRef.current = false;
+      dragStartRef.current = null;
+      lastTouchDistanceRef.current = null;
+    };
+
+
     const handleClick = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       const { rx, ry } = toRef(e.clientX - rect.left, e.clientY - rect.top);
@@ -741,6 +874,15 @@ export default function Mural() {
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
+      lastTouchDistanceRef.current = null;
+      
+      // If we were dragging (single finger), don't process as a tap
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        dragStartRef.current = null;
+        return;
+      }
+
       const touch = e.changedTouches[0];
       const rect = canvas.getBoundingClientRect();
       const { rx, ry } = toRef(
@@ -765,6 +907,13 @@ export default function Mural() {
     canvas.addEventListener('click', handleClick);
     canvas.addEventListener('dblclick', handleDblClick);
     canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+    canvas.addEventListener('mousedown', handleMouseDown);
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mouseup', handleMouseUp);
+    canvas.addEventListener('mouseleave', handleMouseLeave);
+    canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+    canvas.addEventListener('touchcancel', handleTouchCancel);
     // Wheel to zoom (keep focused point stable)
     const setViewScale = (newScale: number, focusCssX?: number, focusCssY?: number) => {
       const cssW = canvas.offsetWidth;
@@ -800,6 +949,13 @@ export default function Mural() {
       canvas.removeEventListener('click', handleClick);
       canvas.removeEventListener('dblclick', handleDblClick);
       canvas.removeEventListener('touchend', handleTouchEnd);
+      canvas.removeEventListener('mousedown', handleMouseDown);
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('mouseup', handleMouseUp);
+      canvas.removeEventListener('mouseleave', handleMouseLeave);
+      canvas.removeEventListener('touchstart', handleTouchStart);
+      canvas.removeEventListener('touchmove', handleTouchMove);
+      canvas.removeEventListener('touchcancel', handleTouchCancel);
       canvas.removeEventListener('wheel', handleWheel as any);
     };
   }, []); // runs once — all mutable state is in refs
