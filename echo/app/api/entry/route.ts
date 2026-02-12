@@ -65,3 +65,37 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const id: string = body?.id;
+    const rawUserId = body?.user_id;
+
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    if (!id || !UUID_RE.test(id)) {
+      return NextResponse.json({ error: 'invalid id' }, { status: 400 });
+    }
+    const user_id = typeof rawUserId === 'string' && UUID_RE.test(rawUserId) ? rawUserId : null;
+    if (!user_id) {
+      return NextResponse.json({ error: 'user_id is required' }, { status: 400 });
+    }
+
+    // Cascading delete on resonances is handled by the DB schema
+    const rows = await sql`
+      DELETE FROM entries
+      WHERE id = ${id} AND user_id = ${user_id}
+      RETURNING id
+    `;
+
+    if (!rows.length) {
+      return NextResponse.json({ error: 'not found or unauthorized' }, { status: 404 });
+    }
+
+    return Response.json({ ok: true });
+  } catch (err) {
+    console.error('[DELETE /api/entry]', err);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}

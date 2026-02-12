@@ -75,6 +75,24 @@ export default function Mural() {
   const [error, setError] = useState<string | null>(null);
   const [similarPanel, setSimilarPanel] = useState<SimilarPanel | null>(null);
   const [panelVisible, setPanelVisible] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Entry | null>(null);
+  const [releaseMsgMounted, setReleaseMsgMounted] = useState(false);
+  const [releaseMsgVisible, setReleaseMsgVisible] = useState(false);
+
+  // Deletion animation state (canvas-driven, lives in refs)
+  const deletingBlobsRef = useRef<Map<string, {
+    startTs: number; x: number; y: number;
+    color: string; shape: Entry['shape']; id: string;
+  }>>(new Map());
+  const particlesRef = useRef<Array<{
+    x: number; y: number; vx: number; vy: number;
+    alpha: number; size: number; color: string;
+  }>>([]);
+
+  // Long-press detection refs
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressConsumedRef = useRef(false);
+  const longPressStartCssRef = useRef<{ x: number; y: number } | null>(null);
 
   // Drag panning state
   const isDraggingRef = useRef(false);
@@ -278,6 +296,62 @@ export default function Mural() {
         console.error('[handleSelect] Fetch error:', err);
       }
     }
+  }, []);
+
+  // Optimistically remove blob, start canvas animations, call DELETE API
+  const handleDelete = useCallback(async (entry: Entry) => {
+    const userId = getUserId();
+    if (!userId || entry.user_id !== userId) return;
+
+    const meta = displayPosRef.current.get(entry.id);
+    const x = meta ? meta.targetX : entry.x;
+    const y = meta ? meta.targetY : entry.y;
+
+    // Register blob for the float-upward fade animation
+    deletingBlobsRef.current.set(entry.id, {
+      startTs: Date.now(), x, y,
+      color: entry.color, shape: entry.shape, id: entry.id,
+    });
+
+    // Spawn 26 dandelion-seed particles
+    for (let i = 0; i < 26; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.2 + Math.random() * 0.4;
+      particlesRef.current.push({
+        x: x + (Math.random() - 0.5) * 8,
+        y: y + (Math.random() - 0.5) * 8,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed * 0.6 - 0.3, // upward bias
+        alpha: 0.7 + Math.random() * 0.3,
+        size: 1.0 + Math.random() * 1.5,
+        color: entry.color,
+      });
+    }
+
+    // Optimistically remove from canvas state
+    entriesRef.current = entriesRef.current.filter((e) => e.id !== entry.id);
+    displayPosRef.current.delete(entry.id);
+    glowMapRef.current.delete(entry.id);
+    similarityGlowMapRef.current.delete(entry.id);
+    if (highlightedRef.current === entry.id) highlightedRef.current = null;
+    setSimilarPanel(null);
+
+    // Fire-and-forget API call
+    fetch('/api/entry', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: entry.id, user_id: userId }),
+    }).catch(() => {});
+
+    // Show the release message after the blob starts floating
+    setTimeout(() => {
+      setReleaseMsgMounted(true);
+      requestAnimationFrame(() => requestAnimationFrame(() => setReleaseMsgVisible(true)));
+      setTimeout(() => {
+        setReleaseMsgVisible(false);
+        setTimeout(() => setReleaseMsgMounted(false), 700);
+      }, 2500);
+    }, 400);
   }, []);
 
   // Animate panel in/out
@@ -649,6 +723,57 @@ export default function Mural() {
         ctx.restore();
       }
 
+      // ── Deletion: blob floats upward and fades ──────────────────────────
+      for (const [delId, info] of deletingBlobsRef.current.entries()) {
+        const elapsed = now - info.startTs;
+        const FLOAT_DUR = 1800;
+        if (elapsed > FLOAT_DUR) { deletingBlobsRef.current.delete(delId); continue; }
+        const t = elapsed / FLOAT_DUR;
+        const alpha = Math.max(0, 1 - t * 1.05);
+        const fy = info.y - elapsed * 0.04; // float upward in ref coords
+        const vc = viewCenterRef.current;
+        const dcx = (info.x - vc.x) * effectiveScale + cssW / 2;
+        const dcy = (fy - vc.y) * effectiveScale + cssH / 2;
+        const dseed = seedFromId(info.id);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = info.color;
+        ctx.shadowColor = info.color;
+        ctx.shadowBlur = 12 * alpha;
+        switch (info.shape) {
+          case 'smooth': drawSmooth(ctx, dcx, dcy, blobR); break;
+          case 'spiky':  drawSpiky(ctx, dcx, dcy, blobR); break;
+          case 'jagged': drawJagged(ctx, dcx, dcy, blobR, dseed); break;
+          default:       drawSmooth(ctx, dcx, dcy, blobR);
+        }
+        ctx.restore();
+      }
+
+      // ── Dandelion seed particles ────────────────────────────────────────
+      const nextParticles: typeof particlesRef.current = [];
+      for (const p of particlesRef.current) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy -= 0.007; // upward buoyancy
+        p.alpha -= 0.011;
+        if (p.alpha > 0) {
+          const vc = viewCenterRef.current;
+          const pcx = (p.x - vc.x) * effectiveScale + cssW / 2;
+          const pcy = (p.y - vc.y) * effectiveScale + cssH / 2;
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, p.alpha);
+          ctx.fillStyle = p.color;
+          ctx.shadowColor = p.color;
+          ctx.shadowBlur = 4;
+          ctx.beginPath();
+          ctx.arc(pcx, pcy, p.size * effectiveScale, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+          nextParticles.push(p);
+        }
+      }
+      particlesRef.current = nextParticles;
+
       ctx.restore();
       animId = requestAnimationFrame(draw);
     };
@@ -741,7 +866,7 @@ export default function Mural() {
     const handleMouseDown = (e: MouseEvent) => {
       // Don't interfere with other mouse buttons or modifier keys
       if (e.button !== 0) return; // left button only
-      
+
       isDraggingRef.current = true;
       dragStartRef.current = {
         cssX: e.clientX,
@@ -749,9 +874,33 @@ export default function Mural() {
         centerX: viewCenterRef.current.x,
         centerY: viewCenterRef.current.y,
       };
+
+      // Long-press detection — only on own blobs
+      const rect = canvas.getBoundingClientRect();
+      const { rx, ry } = toRef(e.clientX - rect.left, e.clientY - rect.top);
+      const blob = findBlob(rx, ry);
+      if (blob && blob.user_id && blob.user_id === userIdRef.current) {
+        longPressStartCssRef.current = { x: e.clientX, y: e.clientY };
+        longPressTimerRef.current = setTimeout(() => {
+          longPressTimerRef.current = null;
+          longPressStartCssRef.current = null;
+          longPressConsumedRef.current = true;
+          isDraggingRef.current = false;
+          dragStartRef.current = null;
+          setDeleteTarget(blob);
+        }, 500);
+      }
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (longPressTimerRef.current && longPressStartCssRef.current) {
+        const d = Math.hypot(e.clientX - longPressStartCssRef.current.x, e.clientY - longPressStartCssRef.current.y);
+        if (d > 8) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+          longPressStartCssRef.current = null;
+        }
+      }
       if (!isDraggingRef.current || !dragStartRef.current) return;
       
       const canvas = canvasRef.current;
@@ -777,18 +926,28 @@ export default function Mural() {
     };
 
     const handleMouseUp = () => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+        longPressStartCssRef.current = null;
+      }
       isDraggingRef.current = false;
       dragStartRef.current = null;
     };
 
     const handleMouseLeave = () => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+        longPressStartCssRef.current = null;
+      }
       isDraggingRef.current = false;
       dragStartRef.current = null;
     };
 
     const handleTouchStart = (e: TouchEvent) => {
       lastTouchDistanceRef.current = null;
-      
+
       if (e.touches.length === 1) {
         // Single finger: start drag panning
         e.preventDefault();
@@ -800,8 +959,29 @@ export default function Mural() {
           centerX: viewCenterRef.current.x,
           centerY: viewCenterRef.current.y,
         };
+
+        // Long-press detection — only on own blobs
+        const rect = canvas.getBoundingClientRect();
+        const { rx, ry } = toRef(touch.clientX - rect.left, touch.clientY - rect.top);
+        const blob = findBlob(rx, ry);
+        if (blob && blob.user_id && blob.user_id === userIdRef.current) {
+          longPressStartCssRef.current = { x: touch.clientX, y: touch.clientY };
+          longPressTimerRef.current = setTimeout(() => {
+            longPressTimerRef.current = null;
+            longPressStartCssRef.current = null;
+            longPressConsumedRef.current = true;
+            isDraggingRef.current = false;
+            dragStartRef.current = null;
+            setDeleteTarget(blob);
+          }, 500);
+        }
       } else if (e.touches.length === 2) {
-        // Two fingers: prepare for pinch zoom
+        // Two fingers: cancel long-press and prepare for pinch zoom
+        if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+          longPressStartCssRef.current = null;
+        }
         isDraggingRef.current = false;
         dragStartRef.current = null;
         const touch1 = e.touches[0];
@@ -815,6 +995,16 @@ export default function Mural() {
     };
 
     const handleTouchMove = (e: TouchEvent) => {
+      // Cancel long-press if finger moved too far
+      if (longPressTimerRef.current && longPressStartCssRef.current && e.touches.length === 1) {
+        const t = e.touches[0];
+        const d = Math.hypot(t.clientX - longPressStartCssRef.current.x, t.clientY - longPressStartCssRef.current.y);
+        if (d > 8) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+          longPressStartCssRef.current = null;
+        }
+      }
       if (e.touches.length === 1 && isDraggingRef.current && dragStartRef.current) {
         // Single finger drag: pan
         e.preventDefault();
@@ -860,6 +1050,11 @@ export default function Mural() {
     };
 
     const handleTouchCancel = () => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+        longPressStartCssRef.current = null;
+      }
       isDraggingRef.current = false;
       dragStartRef.current = null;
       lastTouchDistanceRef.current = null;
@@ -867,6 +1062,10 @@ export default function Mural() {
 
 
     const handleClick = (e: MouseEvent) => {
+      if (longPressConsumedRef.current) {
+        longPressConsumedRef.current = false;
+        return;
+      }
       const rect = canvas.getBoundingClientRect();
       const { rx, ry } = toRef(e.clientX - rect.left, e.clientY - rect.top);
       const blob = findBlob(rx, ry);
@@ -874,8 +1073,23 @@ export default function Mural() {
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
+      // Cancel any pending long-press timer
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+        longPressStartCssRef.current = null;
+      }
+
       lastTouchDistanceRef.current = null;
-      
+
+      // Long-press was consumed — skip tap handling
+      if (longPressConsumedRef.current) {
+        longPressConsumedRef.current = false;
+        isDraggingRef.current = false;
+        dragStartRef.current = null;
+        return;
+      }
+
       // If we were dragging (single finger), don't process as a tap
       if (isDraggingRef.current) {
         isDraggingRef.current = false;
@@ -1104,6 +1318,58 @@ export default function Mural() {
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cathartic Deletion Ritual ─────────────────────────────────────── */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          onClick={() => setDeleteTarget(null)}
+        >
+          <div
+            className="w-full max-w-sm bg-[#0e0e1a] border border-white/10 rounded-2xl p-6 flex flex-col gap-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-white/75 text-sm tracking-wide">let this go?</p>
+            <p className="text-white/35 text-xs leading-relaxed italic line-clamp-3">
+              &ldquo;{deleteTarget.message}&rdquo;
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="flex-1 py-3 rounded-xl border border-white/10 text-white/30 text-xs tracking-widest uppercase hover:text-white/50 hover:border-white/20 transition-all"
+              >
+                keep it
+              </button>
+              <button
+                onClick={() => {
+                  const entry = deleteTarget;
+                  setDeleteTarget(null);
+                  handleDelete(entry);
+                }}
+                className="flex-1 py-3 rounded-xl bg-white/[0.04] border border-white/15 text-white/65 text-xs tracking-widest uppercase hover:bg-white/[0.08] hover:text-white/85 transition-all"
+              >
+                let it go
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Release message ──────────────────────────────────────────────── */}
+      {releaseMsgMounted && (
+        <div
+          className={`fixed inset-0 z-40 flex items-center justify-center pointer-events-none transition-opacity duration-700 ${releaseMsgVisible ? 'opacity-100' : 'opacity-0'}`}
+        >
+          <div className="text-center px-8">
+            <p className="text-white/45 text-sm tracking-wide leading-relaxed">
+              you held this.
+            </p>
+            <p className="text-white/25 text-xs tracking-widest mt-2">
+              now it can float away.
+            </p>
           </div>
         </div>
       )}
